@@ -38,6 +38,18 @@ ruff check . && ruff format --check .
 consumable-inventory   # serves on http://localhost:8000
 ```
 
+## API
+
+Interactive docs are served at `/docs` once the service is running.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET/POST /locations` | List or add locations. A default `home` location always exists. |
+| `GET/POST /items`, `GET/PATCH /items/{id}` | The item catalog, with each item's unit and minimum and maximum levels. |
+| `POST /observations`, `GET /observations` | Sensor readings. A reading replaces the previous one for that location; it never adds to it. Omit `location_id` for the default location, or send `null` when the location is unknown. |
+| `POST /events`, `GET /events` | Purchases (add to stock) and usage (subtract from it). |
+| `GET /items/{id}/stock` | The latest reading at each known location, and their total. |
+
 ### Settings
 
 | Variable | Default | Meaning |
