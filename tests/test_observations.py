@@ -37,12 +37,16 @@ def test_negative_quantity_is_rejected(client, item):
     assert response.status_code == 422
 
 
+def stock(client, item_id, as_of="2026-10-08T09:00:00Z"):
+    return client.get(f"/items/{item_id}/stock", params={"as_of": as_of}).json()
+
+
 def test_observation_shows_up_in_stock(client, item):
     observe(client, item["id"], 2)
 
     stock = client.get(f"/items/{item['id']}/stock").json()
 
-    assert stock["total"] == 2
+    assert stock["on_hand"] == 2
     assert stock["locations"][0]["location_id"] == home_id(client)
 
 
@@ -50,14 +54,14 @@ def test_newer_reading_replaces_older_one(client, item):
     observe(client, item["id"], 3, observed_at="2026-10-01T09:00:00Z")
     observe(client, item["id"], 1, observed_at="2026-10-08T09:00:00Z")
 
-    assert client.get(f"/items/{item['id']}/stock").json()["total"] == 1
+    assert stock(client, item["id"])["on_hand"] == 1
 
 
 def test_late_arriving_older_reading_does_not_replace_newer(client, item):
     observe(client, item["id"], 1, observed_at="2026-10-08T09:00:00Z")
     observe(client, item["id"], 3, observed_at="2026-10-01T09:00:00Z")
 
-    assert client.get(f"/items/{item['id']}/stock").json()["total"] == 1
+    assert stock(client, item["id"])["on_hand"] == 1
 
 
 def test_readings_in_different_locations_add_up(client, item):
@@ -65,14 +69,24 @@ def test_readings_in_different_locations_add_up(client, item):
     observe(client, item["id"], 2)
     observe(client, item["id"], 1, location_id=garage["id"])
 
-    assert client.get(f"/items/{item['id']}/stock").json()["total"] == 3
+    assert client.get(f"/items/{item['id']}/stock").json()["on_hand"] == 3
 
 
-def test_unknown_location_reading_is_not_counted_in_readings(client, item):
-    observe(client, item["id"], 2)
-    observe(client, item["id"], 5, location_id=None)
+def test_unknown_location_reading_can_raise_stock(client, item):
+    observe(client, item["id"], 2, observed_at="2026-10-08T08:00:00Z")
+    observe(client, item["id"], 5, location_id=None, observed_at="2026-10-08T08:30:00Z")
 
-    assert client.get(f"/items/{item['id']}/stock").json()["total"] == 2
+    assert stock(client, item["id"])["on_hand"] == 5
+
+
+def test_unknown_location_reading_cannot_lower_stock(client, item):
+    observe(client, item["id"], 2, observed_at="2026-10-08T08:00:00Z")
+    observe(client, item["id"], 1, location_id=None, observed_at="2026-10-08T08:30:00Z")
+
+    result = stock(client, item["id"])
+
+    assert result["on_hand"] == 2
+    assert [loc["quantity"] for loc in result["locations"]] == [2]
 
 
 def test_timestamps_with_offsets_are_compared_in_utc(client, item):
@@ -80,7 +94,7 @@ def test_timestamps_with_offsets_are_compared_in_utc(client, item):
     observe(client, item["id"], 4, observed_at="2026-10-08T12:00:00Z")
     observe(client, item["id"], 1, observed_at="2026-10-08T08:00:00-05:00")
 
-    assert client.get(f"/items/{item['id']}/stock").json()["total"] == 1
+    assert stock(client, item["id"], as_of="2026-10-08T13:00:00Z")["on_hand"] == 1
 
 
 def test_list_observations_newest_first(client, item):

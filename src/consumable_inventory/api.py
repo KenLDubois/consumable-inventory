@@ -2,24 +2,26 @@
 
 import sqlite3
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from consumable_inventory import db
+from consumable_inventory import db, estimator
 from consumable_inventory.schemas import (
     Event,
     EventIn,
     Item,
     ItemIn,
     ItemUpdate,
+    ListLine,
     Location,
     LocationIn,
     LocationReading,
     Observation,
     ObservationIn,
-    StockReadings,
+    ShoppingList,
+    Stock,
 )
 
 router = APIRouter()
@@ -192,29 +194,78 @@ def list_events(item_id: int | None = None, conn: sqlite3.Connection = Conn):
     return [dict(r) for r in rows]
 
 
-# Stock
+# Stock and the shopping list
 
 
-@router.get("/items/{item_id}/stock", response_model=StockReadings)
-def get_stock(item_id: int, conn: sqlite3.Connection = Conn):
+def item_history(
+    conn: sqlite3.Connection, item_id: int
+) -> tuple[list[estimator.Reading], list[estimator.Change]]:
+    readings = [
+        estimator.Reading(r["location_id"], r["quantity"], datetime.fromisoformat(r["observed_at"]))
+        for r in conn.execute(
+            "SELECT location_id, quantity, observed_at FROM observations"
+            " WHERE item_id = ? ORDER BY observed_at, id",
+            (item_id,),
+        )
+    ]
+    changes = [
+        estimator.Change(r["kind"], r["quantity"], datetime.fromisoformat(r["occurred_at"]))
+        for r in conn.execute(
+            "SELECT kind, quantity, occurred_at FROM events"
+            " WHERE item_id = ? ORDER BY occurred_at, id",
+            (item_id,),
+        )
+    ]
+    return readings, changes
+
+
+def as_utc(value: datetime | None) -> datetime:
+    return datetime.fromisoformat(iso(value))
+
+
+@router.get("/items/{item_id}/stock", response_model=Stock)
+def get_stock(item_id: int, as_of: datetime | None = None, conn: sqlite3.Connection = Conn):
     get_item_row(conn, item_id)
-    # Latest reading per known location: a newer reading replaces an older one,
-    # and different locations add up.
-    rows = conn.execute(
-        """
-        SELECT location_id, quantity, observed_at FROM (
-            SELECT location_id, quantity, observed_at,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY location_id ORDER BY observed_at DESC, id DESC
-                   ) AS rank
-            FROM observations
-            WHERE item_id = ? AND location_id IS NOT NULL
-        ) WHERE rank = 1
-        ORDER BY location_id
-        """,
-        (item_id,),
-    ).fetchall()
-    locations = [LocationReading(**dict(r)) for r in rows]
-    return StockReadings(
-        item_id=item_id, locations=locations, total=sum(r.quantity for r in locations)
+    now_at = as_utc(as_of)
+    est = estimator.estimate(*item_history(conn, item_id), now=now_at)
+    return Stock(
+        item_id=item_id,
+        as_of=now_at,
+        on_hand=est.on_hand,
+        usage_per_day=est.usage_per_day,
+        last_reading_at=est.last_reading_at,
+        locations=[
+            LocationReading(location_id=loc, quantity=r.quantity, observed_at=r.at)
+            for loc, r in est.locations.items()
+        ],
     )
+
+
+@router.get("/list", response_model=ShoppingList)
+def get_list(
+    next_shop: datetime | None = None,
+    as_of: datetime | None = None,
+    conn: sqlite3.Connection = Conn,
+):
+    """What to buy so everything lasts past the next shopping date (default: a week from now)."""
+    now_at = as_utc(as_of)
+    shop_at = as_utc(next_shop) if next_shop is not None else now_at + timedelta(days=7)
+    if shop_at < now_at:
+        raise HTTPException(422, "next_shop cannot be before as_of")
+    lines = []
+    for item in conn.execute("SELECT * FROM items ORDER BY name").fetchall():
+        est = estimator.estimate(*item_history(conn, item["id"]), now=now_at)
+        line = estimator.list_line(est, item["min_level"], item["max_level"], now_at, shop_at)
+        if line is not None:
+            lines.append(
+                ListLine(
+                    item_id=item["id"],
+                    name=item["name"],
+                    unit=item["unit"],
+                    quantity=line.quantity,
+                    on_hand=line.on_hand,
+                    expected_at_shop=line.expected_at_shop,
+                    reason=line.reason,
+                )
+            )
+    return ShoppingList(as_of=now_at, next_shop=shop_at, lines=lines)

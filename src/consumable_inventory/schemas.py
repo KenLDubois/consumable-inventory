@@ -85,9 +85,29 @@ class LocationReading(BaseModel):
     observed_at: datetime
 
 
-class StockReadings(BaseModel):
-    """Latest reading per known location. Step 3 replaces this with the full estimate."""
-
+class Stock(BaseModel):
     item_id: int
+    as_of: datetime
+    # None until the item has at least one reading.
+    on_hand: float | None
+    # None until there are two readings far enough apart to learn from.
+    usage_per_day: float | None
+    last_reading_at: datetime | None
+    # Latest reading at each known location.
     locations: list[LocationReading]
-    total: float
+
+
+class ListLine(BaseModel):
+    item_id: int
+    name: str
+    unit: str
+    quantity: int
+    on_hand: float
+    expected_at_shop: float
+    reason: str
+
+
+class ShoppingList(BaseModel):
+    as_of: datetime
+    next_shop: datetime
+    lines: list[ListLine]

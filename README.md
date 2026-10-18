@@ -48,7 +48,8 @@ Interactive docs are served at `/docs` once the service is running.
 | `GET/POST /items`, `GET/PATCH /items/{id}` | The item catalog, with each item's unit and minimum and maximum levels. |
 | `POST /observations`, `GET /observations` | Sensor readings. A reading replaces the previous one for that location; it never adds to it. Omit `location_id` for the default location, or send `null` when the location is unknown. |
 | `POST /events`, `GET /events` | Purchases (add to stock) and usage (subtract from it). |
-| `GET /items/{id}/stock` | The latest reading at each known location, and their total. |
+| `GET /items/{id}/stock` | The estimate: what's probably on hand now, how fast it's used, and the latest reading at each location. Pass `as_of` to ask about another time. |
+| `GET /list` | The shopping list: what to buy so everything lasts past `next_shop` (default a week from now), never past an item's maximum. |
 
 ### Settings
 
